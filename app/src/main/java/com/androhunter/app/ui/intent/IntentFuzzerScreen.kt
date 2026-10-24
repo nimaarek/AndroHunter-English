@@ -41,6 +41,10 @@ fun IntentFuzzerScreen(
     val context = LocalContext.current
     val pm      = context.packageManager
     val s       = Strings.get()
+    val scope   = rememberCoroutineScope()
+    var targetModel by remember { mutableStateOf<IntentTargetModel?>(null) }
+    var analysisRunning by remember { mutableStateOf(false) }
+    var intentAction by remember { mutableStateOf("") }
 
     val components = remember {
         buildList {
@@ -65,7 +69,6 @@ fun IntentFuzzerScreen(
     var shellInput    by remember { mutableStateOf("") }
     val shellResults  = remember { mutableStateListOf<ShellResult>() }
     val shellState    = rememberLazyListState()
-    val scope         = rememberCoroutineScope()
 
     fun runShell(cmd: String, targetPkg: String = "") {
         val fullCmd = if (targetPkg.isNotBlank()) {
@@ -105,6 +108,37 @@ fun IntentFuzzerScreen(
                 HunterField(s.extraValue, extraValue, Modifier.weight(1f)) { extraValue = it }
             }
             HunterField(s.dataUri, dataUri, Modifier.fillMaxWidth()) { dataUri = it }
+            HunterField("Intent action", intentAction, Modifier.fillMaxWidth()) { intentAction = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = {
+                        analysisRunning = true
+                        scope.launch {
+                            targetModel = IntentTargetAnalyzer.analyze(context, packageName)
+                            analysisRunning = false
+                        }
+                    },
+                    enabled = !analysisRunning,
+                    colors = ButtonDefaults.buttonColors(containerColor = HunterBlue),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    if (analysisRunning) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = HunterBg)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(if (analysisRunning) "ANALYZING TARGET..." else "ANALYZE TARGET", color = HunterBg,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                }
+                targetModel?.let { model ->
+                    Text("${model.dexFilesScanned} DEX · ${model.extraKeyCount} keys · ${model.actionLiteralCount} actions",
+                        color = HunterTextDim, fontFamily = FontFamily.Monospace, fontSize = 9.sp)
+                }
+            }
+            targetModel?.warnings?.take(2)?.forEach { warning ->
+                Text(warning, color = HunterYellow, fontFamily = FontFamily.Monospace, fontSize = 9.sp,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
         }
 
         if (statusMsg.isNotEmpty()) {
@@ -258,12 +292,36 @@ fun IntentFuzzerScreen(
                         Column {
                             Spacer(Modifier.height(10.dp))
                             HorizontalDivider(color = HunterBorder, thickness = 0.5.dp)
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(8.dp))
+                            val hints = targetModel?.components?.firstOrNull { it.className == cls }
+                            if (hints != null && (hints.extraKeys.isNotEmpty() || hints.actionLiterals.isNotEmpty() || hints.uriHints.isNotEmpty())) {
+                                Text("STATIC INPUT HINTS", color = HunterBlue, fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold, fontSize = 9.sp)
+                                hints.extraKeys.take(8).forEach { key ->
+                                    TextButton(onClick = { extraKey = key }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                                        Text("EXTRA: $key", color = HunterGreen, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                    }
+                                }
+                                hints.actionLiterals.take(5).forEach { actionCandidate ->
+                                    TextButton(onClick = { intentAction = actionCandidate }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                                        Text("ACTION: $actionCandidate", color = HunterBlue, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                    }
+                                }
+                                hints.uriHints.take(5).forEach { uriCandidate ->
+                                    TextButton(onClick = { dataUri = uriCandidate }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                                        Text("URI: $uriCandidate", color = HunterYellow, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                    }
+                                }
+                                Text("Static-analysis hints only; verify each input before interpreting test results.",
+                                    color = HunterTextDim, fontFamily = FontFamily.Monospace, fontSize = 9.sp)
+                                Spacer(Modifier.height(6.dp))
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 ActionBtn(s.launchBtn, HunterGreen, Modifier.weight(1f)) {
                                     try {
                                         val intent = Intent().apply {
                                             component = ComponentName(packageName, cls)
+                                            if (intentAction.isNotBlank()) action = intentAction
                                             putExtra(extraKey, extraValue)
                                             if (dataUri.isNotBlank()) data = android.net.Uri.parse(dataUri)
                                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
