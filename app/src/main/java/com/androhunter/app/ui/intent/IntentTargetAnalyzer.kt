@@ -152,7 +152,7 @@ object IntentTargetAnalyzer {
                                     instructions.forEach { instruction ->
                                         val reference = (instruction as? ReferenceInstruction)?.reference
 
-                                        if (instruction.opcode.name.startsWith("const-string") &&
+                                        if (instruction.opcode.name.startsWith("CONST_STRING") &&
                                             reference is StringReference
                                         ) {
                                             val value = reference.string
